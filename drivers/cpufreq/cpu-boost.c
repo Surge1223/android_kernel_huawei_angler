@@ -296,8 +296,11 @@ static int boost_mig_sync_thread(void *data)
 			cpufreq_update_policy(src_cpu);
 		if (cpu_online(dest_cpu)) {
 			cpufreq_update_policy(dest_cpu);
+		get_online_cpus();
+		if (cpu_online(dest_cpu))
 			queue_delayed_work_on(dest_cpu, cpu_boost_wq,
 				&s->boost_rem, msecs_to_jiffies(boost_ms));
+		put_online_cpus();
 		} else {
 			s->boost_min = 0;
 		}
@@ -491,6 +494,7 @@ static int cpu_boost_init(void)
 		INIT_DELAYED_WORK(&s->boost_rem, do_boost_rem);
 		s->thread = kthread_run(boost_mig_sync_thread,
 				(void *) (long)cpu, "boost_sync/%d", cpu);
+		kthread_bind(s->thread, cpu);
 		set_cpus_allowed(s->thread, *cpumask_of(cpu));
 	}
 	cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);

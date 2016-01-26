@@ -120,6 +120,7 @@ struct cpufreq_interactive_tunables {
 	/* End time of boost pulse in ktime converted to usecs */
 	u64 boostpulse_endtime;
 	bool boosted;
+	struct cpufreq_govinfo int_info;
 	/*
 	 * Max additional time to wait in idle, beyond timer_rate, at speeds
 	 * above minimum before wakeup to reduce speed, or -1 if unnecessary.

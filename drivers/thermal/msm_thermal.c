@@ -48,6 +48,7 @@
 #include <soc/qcom/msm-core.h>
 #include <linux/cpumask.h>
 #include <linux/qpnp/power-on.h>
+#include <linux/io.h>
 
 #define CREATE_TRACE_POINTS
 #define TRACE_MSM_THERMAL
@@ -55,6 +56,8 @@
 
 #define MAX_CURRENT_UA 100000
 #define MAX_RAILS 5
+#define BYTES_PER_FUSE_ROW  8
+#define MAX_EFUSE_VALUE  16
 #define TSENS_NAME_FORMAT "tsens_tz_sensor%d"
 #define THERM_SECURE_BITE_CMD 8
 #define SENSOR_SCALING_FACTOR 1
@@ -141,6 +144,10 @@ static DEFINE_MUTEX(ocr_mutex);
 static DEFINE_MUTEX(vdd_mx_mutex);
 static DEFINE_MUTEX(threshold_mutex);
 static uint32_t min_freq_limit;
+static uint32_t default_cpu_temp_limit;
+static bool default_temp_limit_enabled;
+static bool default_temp_limit_probed;
+static bool default_temp_limit_nodes_called;
 static uint32_t curr_gfx_band;
 static uint32_t curr_cx_band;
 static struct kobj_attribute cx_mode_attr;
@@ -283,6 +290,15 @@ static struct devmgr_devices *devices;
 struct vdd_rstr_enable {
 	struct kobj_attribute ko_attr;
 	uint32_t enabled;
+};
+
+enum efuse_data {
+	EFUSE_ADDRESS = 0,
+	EFUSE_SIZE,
+	EFUSE_ROW,
+	EFUSE_START_BIT,
+	EFUSE_BIT_MASK,
+	EFUSE_DATA_MAX,
 };
 
 /* For SMPS only*/
@@ -1485,6 +1501,13 @@ static int psm_set_mode_all(int mode)
 
 	return fail_cnt ? (-EFAULT) : ret;
 }
+
+static ssize_t default_cpu_temp_limit_show(struct kobject *kobj,
+	struct kobj_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", default_cpu_temp_limit);
+}
+
 
 static ssize_t vdd_rstr_en_show(
 	struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -2991,6 +3014,8 @@ static struct notifier_block __refdata msm_thermal_cpu_notifier = {
 static int hotplug_notify(enum thermal_trip_type type, int temp, void *data)
 {
 	struct cpu_info *cpu_node = (struct cpu_info *)data;
+	int cpu;
+	uint32_t multi_hotplug_num_core = 0, multi_hotplug_cluster_id = 0;
 
 	pr_info_ratelimited("%s reach temp threshold: %d\n",
 			       cpu_node->sensor_type, temp);
@@ -3009,6 +3034,45 @@ static int hotplug_notify(enum thermal_trip_type type, int temp, void *data)
 	default:
 		break;
 	}
+
+	multi_hotplug_num_core = bucket & 0xf;
+	if (!(cpu_node->offline && multi_hotplug_num_core))
+		goto invoke_hotplug;
+
+	multi_hotplug_cluster_id = (bucket & 0xf0) >> 4;
+	if (cpu_node->parent_ptr->cluster_id ==
+		multi_hotplug_cluster_id) {
+		int cpu_temp[3][2], i = 0, j;
+		int max_temp, max_cpu;
+		for_each_cpu_mask(cpu, cpu_node->parent_ptr->cluster_cores) {
+			if (cpu == cpu_node->cpu)
+				continue;
+			therm_get_temp(cpus[cpu].sensor_id, cpus[cpu].id_type,
+					(long *)&cpu_temp[i][0]);
+			cpu_temp[i][1] = cpu;
+			i++;
+		}
+
+		for (i = 0; i < 3; i++) {
+			for (j = i + 1; j < 3; j++) {
+				max_temp = cpu_temp[i][0];
+				max_cpu = cpu_temp[i][1];
+				if (cpu_temp[i][0] < cpu_temp[j][0]) {
+					cpu_temp[i][0] = cpu_temp[j][0];
+					cpu_temp[i][1] = cpu_temp[j][1];
+					cpu_temp[j][0] = max_temp;
+					cpu_temp[j][1] = max_cpu;
+				}
+			}
+		}
+		for (i = 0; i < multi_hotplug_num_core; i++) {
+			if (cpu_temp[i][0] > cpus[cpu_temp[i][1]].threshold[HOTPLUG_THRESHOLD_LOW].temp) {
+				cpus[cpu_temp[i][1]].offline = 1;
+				cpus[cpu_temp[i][1]].hotplug_thresh_clear = true;
+			}
+		}
+	}
+invoke_hotplug:
 	if (hotplug_task) {
 		cpu_node->hotplug_thresh_clear = true;
 		complete(&hotplug_notify_complete);
@@ -4682,6 +4746,38 @@ psm_reg_exit:
 	return ret;
 }
 
+static struct kobj_attribute default_cpu_temp_limit_attr =
+		__ATTR_RO(default_cpu_temp_limit);
+
+static int msm_thermal_add_default_temp_limit_nodes(void)
+{
+	struct kobject *module_kobj = NULL;
+	int ret = 0;
+
+	if (!default_temp_limit_probed) {
+		default_temp_limit_nodes_called = true;
+		return ret;
+	}
+	if (!default_temp_limit_enabled)
+		return ret;
+
+	module_kobj = kset_find_obj(module_kset, KBUILD_MODNAME);
+	if (!module_kobj) {
+		pr_err("cannot find kobject\n");
+		return -ENOENT;
+	}
+
+	sysfs_attr_init(&default_cpu_temp_limit_attr.attr);
+	ret = sysfs_create_file(module_kobj, &default_cpu_temp_limit_attr.attr);
+	if (ret) {
+		pr_err(
+		"cannot create default_cpu_temp_limit attribute. err:%d\n",
+		ret);
+		return ret;
+	}
+	return ret;
+}
+
 static ssize_t bucket_info_store(struct kobject *kobj,
 	struct kobj_attribute *attr, const char *buf, size_t count)
 {
@@ -5160,6 +5256,169 @@ read_node_fail:
 	}
 	if (ret == -EPROBE_DEFER)
 		vdd_rstr_probed = false;
+	return ret;
+}
+
+static int get_efuse_temp_map(struct device_node *node,
+				int *efuse_values,
+				int *efuse_temp)
+{
+	uint32_t i, j, efuse_arr_cnt = 0;
+	int ret = 0, efuse_map_cnt = 0;
+	uint32_t data[2 * MAX_EFUSE_VALUE];
+
+	char *key = "qcom,efuse-temperature-map";
+	if (!of_get_property(node, key, &efuse_map_cnt)
+		|| efuse_map_cnt <= 0) {
+		pr_debug("Property %s not defined.\n", key);
+		return -ENODEV;
+	}
+
+	if (efuse_map_cnt % (sizeof(__be32) * 2)) {
+		pr_err("Invalid number(%d) of entry for %s\n",
+				efuse_map_cnt, key);
+		return -EINVAL;
+	}
+
+	efuse_arr_cnt = efuse_map_cnt / sizeof(__be32);
+
+	ret = of_property_read_u32_array(node, key, data, efuse_arr_cnt);
+	if (ret)
+		return -EINVAL;
+
+	efuse_map_cnt /= (sizeof(__be32) * 2);
+
+	j = 0;
+	for (i = 0; i < efuse_map_cnt; i++) {
+		efuse_values[i] = data[j++];
+		efuse_temp[i] = data[j++];
+	}
+
+	return efuse_map_cnt;
+}
+
+static int probe_thermal_efuse_read(struct device_node *node,
+			struct msm_thermal_data *data,
+			struct platform_device *pdev)
+{
+	u64 efuse_bits;
+	int ret = 0;
+	int i = 0;
+	int efuse_map_cnt = 0;
+	int efuse_data_cnt = 0;
+	char *key = NULL;
+	void __iomem *efuse_base = NULL;
+	uint32_t efuse_data[EFUSE_DATA_MAX] = {0};
+	uint32_t efuse_values[MAX_EFUSE_VALUE] = {0};
+	uint32_t efuse_temp[MAX_EFUSE_VALUE] = {0};
+	uint32_t default_temp = 0;
+	uint8_t thermal_efuse_data = 0;
+
+	if (default_temp_limit_probed)
+		goto read_efuse_exit;
+
+	key = "qcom,default-temp";
+	if (of_property_read_u32(node, key, &default_temp))
+		default_temp = 0;
+
+	default_cpu_temp_limit = default_temp;
+
+	key = "qcom,efuse-data";
+	if (!of_get_property(node, key, &efuse_data_cnt) ||
+		efuse_data_cnt <= 0) {
+		ret = -ENODEV;
+		goto read_efuse_fail;
+	}
+	efuse_data_cnt /= sizeof(__be32);
+
+	if (efuse_data_cnt != EFUSE_DATA_MAX) {
+		pr_err("Invalid number of efuse data. data cnt %d\n",
+			efuse_data_cnt);
+		ret = -EINVAL;
+		goto read_efuse_fail;
+	}
+
+	ret = of_property_read_u32_array(node, key, efuse_data,
+						efuse_data_cnt);
+	if (ret)
+		goto read_efuse_fail;
+
+	if (efuse_data[EFUSE_ADDRESS] == 0 ||
+		efuse_data[EFUSE_SIZE] == 0 ||
+		efuse_data[EFUSE_BIT_MASK] == 0) {
+		pr_err("Invalid efuse data: address:%x len:%d bitmask%x\n",
+			efuse_data[EFUSE_ADDRESS], efuse_data[EFUSE_SIZE],
+			efuse_data[EFUSE_BIT_MASK]);
+		ret = -EINVAL;
+		goto read_efuse_fail;
+	}
+
+	efuse_map_cnt = get_efuse_temp_map(node, efuse_values,
+						efuse_temp);
+	if (efuse_map_cnt <= 0 ||
+		efuse_map_cnt > (efuse_data[EFUSE_BIT_MASK] + 1)) {
+		pr_err("Invalid efuse-temperature-map. cnt%d\n",
+			efuse_map_cnt);
+		ret = -EINVAL;
+		goto read_efuse_fail;
+	}
+
+	efuse_base = ioremap(efuse_data[EFUSE_ADDRESS], efuse_data[EFUSE_SIZE]);
+	if (!efuse_base) {
+		pr_err("Unable to map efuse_addr:%x with size%d\n",
+			efuse_data[EFUSE_ADDRESS],
+			efuse_data[EFUSE_SIZE]);
+		ret = -EINVAL;
+		goto read_efuse_fail;
+	}
+
+	efuse_bits = readl_relaxed(efuse_base
+		+ efuse_data[EFUSE_ROW] * BYTES_PER_FUSE_ROW);
+
+	thermal_efuse_data = (efuse_bits >> efuse_data[EFUSE_START_BIT]) &
+						efuse_data[EFUSE_BIT_MASK];
+
+	/* Get cpu limit temp from efuse truth table */
+	for (; i < efuse_map_cnt; i++) {
+		if (efuse_values[i] == thermal_efuse_data) {
+			default_cpu_temp_limit = efuse_temp[i];
+			break;
+		}
+	}
+	if (i >= efuse_map_cnt) {
+		if (!default_temp) {
+			pr_err("No matching efuse value. value:%d\n",
+				thermal_efuse_data);
+			ret = -EINVAL;
+			goto read_efuse_fail;
+		}
+	}
+
+	pr_debug(
+	"Efuse address:0x%x [row:%d] = 0x%llx @%d:mask:0x%x = 0x%x temp:%d\n",
+		efuse_data[EFUSE_ADDRESS], efuse_data[EFUSE_ROW], efuse_bits,
+		efuse_data[EFUSE_START_BIT], efuse_data[EFUSE_BIT_MASK],
+		thermal_efuse_data, default_cpu_temp_limit);
+
+	default_temp_limit_enabled = true;
+
+read_efuse_fail:
+	if (efuse_base)
+		iounmap(efuse_base);
+	default_temp_limit_probed = true;
+	if (ret) {
+		if (!default_temp) {
+			dev_info(&pdev->dev,
+			"%s:Failed reading node=%s, key=%s. KTM continues\n",
+				__func__, node->full_name, key);
+		} else {
+			default_temp_limit_enabled = true;
+			pr_debug("Default cpu temp limit is %d\n",
+					default_cpu_temp_limit);
+			ret = 0;
+		}
+	}
+read_efuse_exit:
 	return ret;
 }
 
@@ -5814,6 +6073,7 @@ static int msm_thermal_dev_probe(struct platform_device *pdev)
 	ret = probe_vdd_rstr(node, &data, pdev);
 	if (ret == -EPROBE_DEFER)
 		goto fail;
+	probe_thermal_efuse_read(node, &data, pdev);
 	probe_sensor_info(node, &data, pdev);
 	ret = probe_ocr(node, &data, pdev);
 
@@ -5935,6 +6195,7 @@ int __init msm_thermal_late_init(void)
 		msm_thermal_add_cc_nodes();
 	msm_thermal_add_psm_nodes();
 	msm_thermal_add_vdd_rstr_nodes();
+	msm_thermal_add_default_temp_limit_nodes();
 	msm_thermal_add_sensor_info_nodes();
 	if (ocr_reg_init_defer) {
 		if (!ocr_reg_init(msm_thermal_info.pdev)) {
