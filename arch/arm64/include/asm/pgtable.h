@@ -78,6 +78,7 @@ extern pgprot_t pgprot_default;
 #define PAGE_KERNEL_EXEC	_MOD_PROT(pgprot_default, PTE_UXN | PTE_DIRTY | PTE_WRITE)
 
 #define PAGE_HYP		_MOD_PROT(pgprot_default, PTE_HYP)
+#define PAGE_KERNEL_NOCACHE     _MOD_PROT(pgprot_default, PTE_UXN | PTE_DIRTY | PTE_WRITE)
 #define PAGE_HYP_DEVICE		__pgprot(PROT_DEVICE_nGnRE | PTE_HYP)
 
 #define PAGE_S2			__pgprot_modify(pgprot_default, PTE_S2_MEMATTR_MASK, PTE_S2_MEMATTR(MT_S2_NORMAL) | PTE_S2_RDONLY)
@@ -91,6 +92,7 @@ extern pgprot_t pgprot_default;
 #define __PAGE_READONLY		__pgprot(_PAGE_DEFAULT | PTE_USER | PTE_NG | PTE_PXN | PTE_UXN)
 #define __PAGE_READONLY_EXEC	__pgprot(_PAGE_DEFAULT | PTE_USER | PTE_NG | PTE_PXN)
 #define __PAGE_EXECONLY		__pgprot(_PAGE_DEFAULT | PTE_NG | PTE_PXN)
+#define __PAGE_KERNEL_NOCACHE	__pgprot(_PAGE_DEFAULT | PTE_USER | PTE_NG | PTE_PXN | PTE_WRITE)
 
 #endif /* __ASSEMBLY__ */
 

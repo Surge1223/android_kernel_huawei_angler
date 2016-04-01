@@ -41,5 +41,15 @@ extern void secondary_holding_pen(void);
 extern u64 __cpu_logical_map[NR_CPUS];
 #define cpu_logical_map(cpu)    __cpu_logical_map[cpu]
 extern volatile unsigned long secondary_holding_pen_release;
-
+static inline bool is_smp(void)
+{
+#ifndef CONFIG_SMP
+        return false;
+#elif defined(CONFIG_SMP_ON_UP)
+        extern unsigned int smp_on_up;
+        return !!smp_on_up;
+#else
+        return true;
+#endif
+}
 #endif /* __ASM_SMP_PLAT_H */

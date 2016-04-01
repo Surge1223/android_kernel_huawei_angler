@@ -12,10 +12,12 @@ struct irq_affinity_notify;
 struct proc_dir_entry;
 struct module;
 struct irq_desc;
+struct irq_domain;
+struct pt_regs;
 
 /**
  * struct irq_desc - interrupt descriptor
- * @irq_data:		per irq and chip data passed down to chip functions
+ * @irq_common_data:	per irq and chip data passed down to chip functions
  * @kstat_irqs:		irq stats per cpu
  * @handle_irq:		highlevel irq-events handler
  * @preflow_handler:	handler called before the flow handler (currently used by sparc)
@@ -37,10 +39,16 @@ struct irq_desc;
  * @threads_oneshot:	bitfield to handle shared oneshot threads
  * @threads_active:	number of irqaction threads currently running
  * @wait_for_threads:	wait queue for sync_irq to wait for threaded handlers
+ * @nr_actions:		number of installed actions on this descriptor
+ * @no_suspend_depth:	number of irqactions on a irq descriptor with
+ *			IRQF_NO_SUSPEND set
+ * @force_resume_depth:	number of irqactions on a irq descriptor with
+ *			IRQF_FORCE_RESUME set
  * @dir:		/proc/irq/ procfs entry
  * @name:		flow handler name for /proc/interrupts output
  */
 struct irq_desc {
+	struct irq_common_data	irq_common_data;
 	struct irq_data		irq_data;
 	unsigned int __percpu	*kstat_irqs;
 	irq_flow_handler_t	handle_irq;
@@ -70,6 +78,12 @@ struct irq_desc {
 	unsigned long		threads_oneshot;
 	atomic_t		threads_active;
 	wait_queue_head_t       wait_for_threads;
+#ifdef CONFIG_PM_SLEEP
+	unsigned int		nr_actions;
+	unsigned int		no_suspend_depth;
+	unsigned int		cond_suspend_depth;
+	unsigned int		force_resume_depth;
+#endif
 #ifdef CONFIG_PROC_FS
 	struct proc_dir_entry	*dir;
 #endif
@@ -81,6 +95,16 @@ struct irq_desc {
 #ifndef CONFIG_SPARSE_IRQ
 extern struct irq_desc irq_desc[NR_IRQS];
 #endif
+
+static inline struct irq_desc *irq_data_to_desc(struct irq_data *data)
+{
+	return container_of(data->common, struct irq_desc, irq_common_data);
+}
+
+static inline unsigned int irq_desc_get_irq(struct irq_desc *desc)
+{
+	return desc->irq_data.irq;
+}
 
 static inline struct irq_data *irq_desc_get_irq_data(struct irq_desc *desc)
 {
@@ -99,12 +123,12 @@ static inline void *irq_desc_get_chip_data(struct irq_desc *desc)
 
 static inline void *irq_desc_get_handler_data(struct irq_desc *desc)
 {
-	return desc->irq_data.handler_data;
+	return desc->irq_common_data.handler_data;
 }
 
 static inline struct msi_desc *irq_desc_get_msi_desc(struct irq_desc *desc)
 {
-	return desc->irq_data.msi_desc;
+	return desc->irq_common_data.msi_desc;
 }
 
 /*

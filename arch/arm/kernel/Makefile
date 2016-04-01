@@ -22,7 +22,7 @@ obj-y		:= elf.o entry-armv.o entry-common.o irq.o opcodes.o \
 obj-$(CONFIG_ATAGS)		+= atags_parse.o
 obj-$(CONFIG_ATAGS_PROC)	+= atags_proc.o
 obj-$(CONFIG_DEPRECATED_PARAM_STRUCT) += atags_compat.o
-
+obj-$(CONFIG_PROC_DEVICETREE) += device-tree.o
 obj-$(CONFIG_OC_ETM)		+= etm.o
 obj-$(CONFIG_CPU_IDLE)		+= cpuidle.o
 obj-$(CONFIG_ISA_DMA_API)	+= dma.o

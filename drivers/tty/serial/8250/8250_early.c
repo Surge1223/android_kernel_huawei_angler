@@ -37,7 +37,7 @@
 #include <asm/serial.h>
 #ifdef CONFIG_FIX_EARLYCON_MEM
 #include <asm/pgtable.h>
-#include <asm/fixmap.h>
+#include "fixmap.h"
 #endif
 
 struct early_serial8250_device {

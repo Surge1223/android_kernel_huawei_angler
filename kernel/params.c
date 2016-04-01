@@ -19,6 +19,7 @@
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/slab.h>
@@ -162,9 +163,9 @@ static char *next_arg(char *args, char **param, char **val)
 			if (args[i-1] == '"')
 				args[i-1] = '\0';
 		}
-		if (quoted && args[i-1] == '"')
-			args[i-1] = '\0';
 	}
+	if (quoted && args[i-1] == '"')
+		args[i-1] = '\0';
 
 	if (args[i]) {
 		args[i] = '\0';
@@ -285,14 +286,15 @@ EXPORT_SYMBOL(param_set_charp);
 
 int param_get_charp(char *buffer, const struct kernel_param *kp)
 {
-	return sprintf(buffer, "%s", *((char **)kp->arg));
+	return scnprintf(buffer, PAGE_SIZE, "%s", *((char **)kp->arg));
 }
 EXPORT_SYMBOL(param_get_charp);
 
-static void param_free_charp(void *arg)
+void param_free_charp(void *arg)
 {
 	maybe_kfree_parameter(*((char **)arg));
 }
+EXPORT_SYMBOL(param_free_charp);
 
 struct kernel_param_ops param_ops_charp = {
 	.set = param_set_charp,
@@ -324,6 +326,36 @@ struct kernel_param_ops param_ops_bool = {
 	.get = param_get_bool,
 };
 EXPORT_SYMBOL(param_ops_bool);
+
+int param_set_bool_enable_only(const char *val, const struct kernel_param *kp)
+{
+	int err = 0;
+	bool new_value;
+	bool orig_value = *(bool *)kp->arg;
+	struct kernel_param dummy_kp = *kp;
+
+	dummy_kp.arg = &new_value;
+
+	err = param_set_bool(val, &dummy_kp);
+	if (err)
+		return err;
+
+	/* Don't let them unset it once it's set! */
+	if (!new_value && orig_value)
+		return -EROFS;
+
+	if (new_value)
+		err = param_set_bool(val, kp);
+
+	return err;
+}
+EXPORT_SYMBOL_GPL(param_set_bool_enable_only);
+
+const struct kernel_param_ops param_ops_bool_enable_only = {
+	.set = param_set_bool_enable_only,
+	.get = param_get_bool,
+};
+EXPORT_SYMBOL_GPL(param_ops_bool_enable_only);
 
 /* This one must be bool. */
 int param_set_invbool(const char *val, const struct kernel_param *kp)
@@ -438,7 +470,7 @@ static int param_array_get(char *buffer, const struct kernel_param *kp)
 {
 	int i, off, ret;
 	const struct kparam_array *arr = kp->arr;
-	struct kernel_param p;
+	struct kernel_param p = *kp;
 
 	p = *kp;
 	for (i = off = 0; i < (arr->num ? *arr->num : arr->max); i++) {
@@ -542,7 +574,7 @@ static ssize_t param_attr_show(struct module_attribute *mattr,
 
 /* sysfs always hands a nul-terminated string in buf.  We rely on that. */
 static ssize_t param_attr_store(struct module_attribute *mattr,
-				struct module_kobject *km,
+				struct module_kobject *mk,
 				const char *buf, size_t len)
 {
  	int err;
@@ -685,8 +717,10 @@ int module_param_sysfs_setup(struct module *mod,
 		if (kparam[i].perm == 0)
 			continue;
 		err = add_sysfs_param(&mod->mkobj, &kparam[i], kparam[i].name);
-		if (err)
+		if (err) {
+			free_module_param_attrs(&mod->mkobj);
 			return err;
+		}
 		params = true;
 	}
 
@@ -827,7 +861,7 @@ ssize_t __modver_version_show(struct module_attribute *mattr,
 	struct module_version_attribute *vattr =
 		container_of(mattr, struct module_version_attribute, mattr);
 
-	return sprintf(buf, "%s\n", vattr->version);
+	return scnprintf(buf, PAGE_SIZE, "%s\n", vattr->version);
 }
 
 extern const struct module_version_attribute *__start___modver[];
@@ -912,7 +946,14 @@ static const struct kset_uevent_ops module_uevent_ops = {
 struct kset *module_kset;
 int module_sysfs_initialized;
 
+static void module_kobj_release(struct kobject *kobj)
+{
+	struct module_kobject *mk = to_module_kobject(kobj);
+	complete(mk->kobj_completion);
+}
+
 struct kobj_type module_ktype = {
+	.release   =	module_kobj_release,
 	.sysfs_ops =	&module_sysfs_ops,
 };
 

@@ -324,7 +324,9 @@ asmlinkage long sys_restart_syscall(void);
 asmlinkage long sys_kexec_load(unsigned long entry, unsigned long nr_segments,
 				struct kexec_segment __user *segments,
 				unsigned long flags);
-
+asmlinkage long sys_kexec_file_load(int kernel_fd, int initrd_fd,
+				const char __user *cmdline_ptr,
+				unsigned long cmdline_len, unsigned long flags);
 asmlinkage long sys_exit(int error_code);
 asmlinkage long sys_exit_group(int error_code);
 asmlinkage long sys_wait4(pid_t pid, int __user *stat_addr,

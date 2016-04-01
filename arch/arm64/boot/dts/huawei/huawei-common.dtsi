@@ -22,8 +22,20 @@
 			linux,remove-completely;
 			label = "ramoops_mem";
 		};
+		
+		ram_console_mem: ram_console_region@0 {
+			linux,reserve-contiguous-region;
+			linux,reserve-region;
+			reg = <0 0x20000000 0 0x00020000>;
+			linux,remove-completely;
+			label = "ram_console_mem";
+		};
+		
+		
 	};
 };
+
+
 
 &soc {
 	ramoops {
@@ -42,6 +54,24 @@
 			compatible = "qcom,msm-contig-mem";
 			qcom,memblock-reserve = <0x1fe00000 0x00200000>;
 		};
+	};
+
+	ram_console {
+		compatible = "android,ram-console";
+		status = "ok";
+		bootinfo = <0>;
+		android,ram_console-ram-buffer-start = <0x20000000>;
+		android,ram_console-ram-buffer-size = <0x20000>;
+		linux,contiguous-region = <&ram_console_mem>;
+		android,ram_console-hole {
+			compatible = "qcom,msm-contig-mem";
+		qcom,memblock-reserve = <0x20000000  0x00020000>;
+		
+		};
+	};
+	
+	bootinfo {
+		compatible = "bootinfo";
 	};
 
 	qcom,mpm@fc4281d0 {

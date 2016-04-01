@@ -26,7 +26,8 @@ extern void early_ioremap_init(void);
 
 /* Generic initialization called by architecture code */
 extern void early_ioremap_setup(void);
-
+extern void copy_from_early_mem(void *dest, phys_addr_t src,
+				unsigned long size);
 /*
  * Called as last step in paging_init() so library can act
  * accordingly for subsequent map/unmap requests.

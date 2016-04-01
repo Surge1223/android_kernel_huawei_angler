@@ -22,5 +22,8 @@
 #include <linux/types.h>
 
 #define COMMAND_LINE_SIZE	2048
-
+extern unsigned int system_rev;
+extern const char *system_serial;
+extern unsigned int system_serial_low;
+extern unsigned int system_serial_high;
 #endif

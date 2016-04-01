@@ -6,6 +6,7 @@
  * of this file for your non core code.
  */
 #include <linux/irqdesc.h>
+#include <linux/kernel_stat.h>
 
 #ifdef CONFIG_SPARSE_IRQ
 # define IRQ_BITMAP_BITS	(NR_IRQS + 8196)
@@ -16,6 +17,8 @@
 #define istate core_internal_state__do_not_mess_with_it
 
 extern bool noirqdebug;
+
+extern struct irqaction chained_action;
 
 /*
  * Bits used by threaded handlers:
@@ -73,6 +76,13 @@ extern void irq_percpu_enable(struct irq_desc *desc, unsigned int cpu);
 extern void irq_percpu_disable(struct irq_desc *desc, unsigned int cpu);
 extern void mask_irq(struct irq_desc *desc);
 extern void unmask_irq(struct irq_desc *desc);
+extern void unmask_threaded_irq(struct irq_desc *desc);
+
+#ifdef CONFIG_SPARSE_IRQ
+static inline void irq_mark_irq(unsigned int irq) { }
+#else
+extern void irq_mark_irq(unsigned int irq);
+#endif
 
 extern void init_kstat_irqs(struct irq_desc *desc, int node, int nr);
 
@@ -82,6 +92,7 @@ irqreturn_t handle_irq_event(struct irq_desc *desc);
 /* Resending of interrupts :*/
 void check_irq_resend(struct irq_desc *desc, unsigned int irq);
 bool irq_wait_for_poll(struct irq_desc *desc);
+void __irq_wake_thread(struct irq_desc *desc, struct irqaction *action);
 
 #ifdef CONFIG_PROC_FS
 extern void register_irq_proc(unsigned int irq, struct irq_desc *desc);

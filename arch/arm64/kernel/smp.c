@@ -17,6 +17,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <linux/acpi.h>
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
@@ -36,11 +37,15 @@
 #include <linux/completion.h>
 #include <linux/of.h>
 #include <linux/irq_work.h>
+#include <linux/kexec.h>
 
+#include <asm/alternative.h>
 #include <asm/atomic.h>
 #include <asm/cacheflush.h>
+#include <asm/cpu.h>
 #include <asm/cputype.h>
 #include <asm/cpu_ops.h>
+#include <asm/kexec.h>
 #include <asm/mmu_context.h>
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -49,7 +54,11 @@
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
 #include <asm/ptrace.h>
+#include <asm/virt.h>
 #include <asm/edac.h>
+#include "cpu-reset.h"
+
+
 
 /*
  * as from 2.5, kernels no longer have an init_tasks structure
@@ -66,8 +75,8 @@ enum ipi_msg_type {
 	IPI_CPU_STOP,
 	IPI_TIMER,
 	IPI_IRQ_WORK,
-	IPI_WAKEUP,
 	IPI_CPU_BACKTRACE,
+	IPI_WAKEUP,
 };
 
 /*
@@ -84,7 +93,7 @@ static int __cpuinit boot_secondary(unsigned int cpu, struct task_struct *idle)
 
 static DECLARE_COMPLETION(cpu_running);
 
-int __cpuinit __cpu_up(unsigned int cpu, struct task_struct *idle)
+int __cpu_up(unsigned int cpu, struct task_struct *idle)
 {
 	int ret;
 
@@ -140,7 +149,7 @@ asmlinkage void __cpuinit secondary_start_kernel(void)
 	 */
 	atomic_inc(&mm->mm_count);
 	current->active_mm = mm;
-	cpumask_set_cpu(cpu, mm_cpumask(mm));
+	//cpumask_set_cpu(cpu, mm_cpumask(mm));
 
 	set_my_cpu_offset(per_cpu_offset(smp_processor_id()));
 	pr_debug("CPU%u: Booted secondary processor\n", cpu);
@@ -155,16 +164,19 @@ asmlinkage void __cpuinit secondary_start_kernel(void)
 	preempt_disable();
 	trace_hardirqs_off();
 
+
+
 	if (cpu_ops[cpu]->cpu_postboot)
 		cpu_ops[cpu]->cpu_postboot();
 
 	/*
-	 * Enable GIC and timers.
+	 * Log the CPU info before it is marked online and might get read.
 	 */
-	smp_store_cpu_info(cpu);
+
 
 	notify_cpu_starting(cpu);
 
+	smp_store_cpu_info(cpu);
 	/*
 	 * OK, now it's safe to let the boot CPU continue.  Wait for
 	 * the CPU migration code to notice that the CPU is online
@@ -242,7 +254,7 @@ static int op_cpu_kill(unsigned int cpu)
 	 * time and hope that it's dead, so let's skip the wait and just hope.
 	 */
 	if (!cpu_ops[cpu]->cpu_kill)
-		return 1;
+		return 0;
 
 	return cpu_ops[cpu]->cpu_kill(cpu);
 }
@@ -524,8 +536,8 @@ static const char *ipi_types[NR_IPI] = {
 	S(IPI_CPU_STOP, "CPU stop interrupts"),
 	S(IPI_TIMER, "Timer broadcast interrupts"),
 	S(IPI_IRQ_WORK, "IRQ work interrupts"),
+	S(IPI_CPU_BACKTRACE, "IRQ backtrace"),
 	S(IPI_WAKEUP, "CPU wakeup interrupts"),
-	S(IPI_CPU_BACKTRACE, "CPU backtrace"),
 };
 
 void show_ipi_list(struct seq_file *p, int prec)
@@ -562,20 +574,26 @@ DEFINE_PER_CPU(struct pt_regs, regs_before_stop);
  */
 static void ipi_cpu_stop(unsigned int cpu, struct pt_regs *regs)
 {
-	if (system_state == SYSTEM_BOOTING ||
-	    system_state == SYSTEM_RUNNING) {
-		per_cpu(regs_before_stop, cpu) = *regs;
-		raw_spin_lock(&stop_lock);
-		pr_crit("CPU%u: stopping\n", cpu);
-		show_regs(regs);
-		dump_stack();
-		arm64_check_cache_ecc(NULL);
-		raw_spin_unlock(&stop_lock);
+	if (is_in_crash_kexec()) {
+		crash_save_cpu(regs, cpu);
+		/*
+		 * printing messages at panic may slow down the shutdown.
+		 * So don't fall through dump_stack().
+		 */
+	} else if (system_state == SYSTEM_BOOTING ||
+			 system_state == SYSTEM_RUNNING) {
+			per_cpu(regs_before_stop, cpu) = *regs;
+			raw_spin_lock(&stop_lock);
+			pr_crit("CPU%u: stopping\n", cpu);
+			show_regs(regs);
+			dump_stack();
+			arm64_check_cache_ecc(NULL);
+			raw_spin_unlock(&stop_lock);
 	}
 
 	set_cpu_active(cpu, false);
 
-	flush_cache_all();
+//	flush_cache_all();
 	local_irq_disable();
 
 	while (1)
