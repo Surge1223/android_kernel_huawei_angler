@@ -78,8 +78,8 @@ enum ipi_msg_type {
 	IPI_CPU_STOP,
 	IPI_TIMER,
 	IPI_IRQ_WORK,
-	IPI_CPU_BACKTRACE,
 	IPI_WAKEUP,
+	IPI_CPU_BACKTRACE,
 };
 
 /*
@@ -597,7 +597,7 @@ static void ipi_cpu_stop(unsigned int cpu, struct pt_regs *regs)
 
 	set_cpu_active(cpu, false);
 
-//	flush_cache_all();
+	flush_cache_all();
 	local_irq_disable();
 
 	while (1)

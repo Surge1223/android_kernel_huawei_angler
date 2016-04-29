@@ -112,7 +112,6 @@ config STACKTRACE_SUPPORT
 config ILLEGAL_POINTER_VALUE
 	hex
 	default 0xdead000000000000
-
 config LOCKDEP_SUPPORT
 	def_bool y
 
@@ -523,6 +522,7 @@ config KEXEC
 	  current kernel, and to start another kernel.  It is like a reboot
 	  but it is independent of the system firmware.   And like a reboot
 	  you can start any kernel with it, not just Linux.
+	default m
 
 config ARMV7_COMPAT
 	bool "Kernel support for ARMv7 applications"
