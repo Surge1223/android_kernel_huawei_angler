@@ -401,7 +401,7 @@ pipe_read(struct kiocb *iocb, const struct iovec *_iov,
 			void *addr;
 			size_t chars = buf->len, remaining;
 			int error, atomic, offset;
-
+			
 			if (chars > total_len)
 				chars = total_len;
 
