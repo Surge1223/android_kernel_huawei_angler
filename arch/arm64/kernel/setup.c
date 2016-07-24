@@ -461,6 +461,7 @@ void __init setup_arch(char **cmdline_p)
 	setup_processor();
 
 	setup_machine_fdt(__fdt_pointer);
+	pr_info("DTB SEG ADRESS: 0x%llx\n", __fdt_pointer);
 	pr_info("Boot CPU: AArch64 Processor [%08x]\n", read_cpuid_id());
 
 	sprintf(init_utsname()->machine, ELF_PLATFORM);
