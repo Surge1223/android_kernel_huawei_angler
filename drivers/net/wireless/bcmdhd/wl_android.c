@@ -246,22 +246,17 @@ static int wl_android_get_rssi(struct net_device *net, char *command, int total_
 		return -1;
 	if ((ssid.SSID_len == 0) || (ssid.SSID_len > DOT11_MAX_SSID_LEN)) {
 		DHD_ERROR(("%s: wldev_get_ssid failed\n", __FUNCTION__));
+	} else if (total_len <= ssid.SSID_len) {
+		return -ENOMEM;
 	} else {
-		if (total_len > ssid.SSID_len) {
-			memcpy(command, ssid.SSID, ssid.SSID_len);
-			bytes_written = ssid.SSID_len;
-		} else {
-			return BCME_ERROR;
-		}
+		memcpy(command, ssid.SSID, ssid.SSID_len);
+		bytes_written = ssid.SSID_len;
 	}
-
-	if ((total_len - bytes_written) >= (strlen(" rssi -XXX") + 1)) {
-		bytes_written += snprintf(&command[bytes_written], total_len - bytes_written,
-		" rssi %d", rssi);
-		command[bytes_written] = '\0';
-	} else {
-		return BCME_ERROR;
-	}
+	if ((total_len - bytes_written) < (strlen(" rssi -XXX") + 1))
+		return -ENOMEM;
+	bytes_written += scnprintf(&command[bytes_written],
+		total_len - bytes_written, " rssi %d", rssi);
+	command[bytes_written] = '\0';
 
 	DHD_INFO(("%s: command result is %s (%d)\n", __FUNCTION__, command, bytes_written));
 	return bytes_written;
@@ -1157,7 +1152,7 @@ wl_android_iolist_resume(struct net_device *dev, struct list_head *head)
 static int
 wl_android_set_miracast(struct net_device *dev, char *command, int total_len)
 {
-	int mode, val;
+	int mode, val = 0;
 	int ret = 0;
 	struct io_cfg config;
 
@@ -1245,14 +1240,10 @@ resume:
 
 int wl_keep_alive_set(struct net_device *dev, char* extra, int total_len)
 {
-	char 				buf[256];
-	const char 			*str;
 	wl_mkeep_alive_pkt_t	mkeep_alive_pkt;
-	wl_mkeep_alive_pkt_t	*mkeep_alive_pktp;
-	int					buf_len;
-	int					str_len;
-	int res 				= -1;
+	int ret;
 	uint period_msec = 0;
+	char *buf;
 
 	if (extra == NULL)
 	{
@@ -1265,39 +1256,32 @@ int wl_keep_alive_set(struct net_device *dev, char* extra, int total_len)
 		 return -EINVAL;
 	}
 	DHD_ERROR(("%s: period_msec is %d\n", __FUNCTION__, period_msec));
-
 	memset(&mkeep_alive_pkt, 0, sizeof(wl_mkeep_alive_pkt_t));
 
-	str = "mkeep_alive";
-	str_len = strlen(str);
-	strncpy(buf, str, str_len);
-	buf[ str_len ] = '\0';
-	mkeep_alive_pktp = (wl_mkeep_alive_pkt_t *) (buf + str_len + 1);
 	mkeep_alive_pkt.period_msec = period_msec;
-	buf_len = str_len + 1;
 	mkeep_alive_pkt.version = htod16(WL_MKEEP_ALIVE_VERSION);
 	mkeep_alive_pkt.length = htod16(WL_MKEEP_ALIVE_FIXED_LEN);
 
 	/* Setup keep alive zero for null packet generation */
 	mkeep_alive_pkt.keep_alive_id = 0;
 	mkeep_alive_pkt.len_bytes = 0;
-	buf_len += WL_MKEEP_ALIVE_FIXED_LEN;
-	/* Keep-alive attributes are set in local	variable (mkeep_alive_pkt), and
-	 * then memcpy'ed into buffer (mkeep_alive_pktp) since there is no
-	 * guarantee that the buffer is properly aligned.
-	 */
-	memcpy((char *)mkeep_alive_pktp, &mkeep_alive_pkt, WL_MKEEP_ALIVE_FIXED_LEN);
 
-	if ((res = wldev_ioctl(dev, WLC_SET_VAR, buf, buf_len, TRUE)) < 0)
-	{
-		DHD_ERROR(("%s:keep_alive set failed. res[%d]\n", __FUNCTION__, res));
+	buf = kzalloc(WLC_IOCTL_SMLEN, GFP_KERNEL);
+	if (!buf) {
+		DHD_ERROR(("%s: buffer alloc failed\n", __FUNCTION__));
+		return BCME_NOMEM;
 	}
+
+	ret = wldev_iovar_setbuf(dev, "mkeep_alive", (char *)&mkeep_alive_pkt,
+				 WL_MKEEP_ALIVE_FIXED_LEN, buf, WLC_IOCTL_SMLEN,
+				 NULL);
+	if (ret < 0)
+		DHD_ERROR(("%s:keep_alive set failed:%d\n", __FUNCTION__, ret));
 	else
-	{
-		DHD_ERROR(("%s:keep_alive set ok. res[%d]\n", __FUNCTION__, res));
-	}
+		DHD_TRACE(("%s:keep_alive set ok\n", __FUNCTION__));
 
-	return res;
+	kfree(buf);
+	return ret;
 }
 
 int wl_android_priv_cmd(struct net_device *net, struct ifreq *ifr, int cmd)
@@ -1345,17 +1329,13 @@ int wl_android_priv_cmd(struct net_device *net, struct ifreq *ifr, int cmd)
 	}
 
 	if ((priv_cmd.total_len > PRIVATE_COMMAND_MAX_LEN) || (priv_cmd.total_len < 0)) {
-		DHD_ERROR(("%s: buf length invalid:%d \n", __FUNCTION__, priv_cmd.total_len));
+		DHD_ERROR(("%s: buf length invalid:%d\n", __FUNCTION__,
+			   priv_cmd.total_len));
 		ret = -EINVAL;
 		goto exit;
 	}
 
-	if (priv_cmd.total_len < PRIVATE_COMMAND_DEF_LEN) {
-		buf_size = PRIVATE_COMMAND_DEF_LEN;
-	} else {
-		buf_size = priv_cmd.total_len;
-	}
-
+	buf_size = max(priv_cmd.total_len, PRIVATE_COMMAND_DEF_LEN);
 	command = kmalloc((buf_size + 1), GFP_KERNEL);
 
 	if (!command)
@@ -1372,22 +1352,20 @@ int wl_android_priv_cmd(struct net_device *net, struct ifreq *ifr, int cmd)
 
 	DHD_INFO(("%s: Android private cmd \"%s\" on %s\n", __FUNCTION__, command, ifr->ifr_name));
 
-	bytes_written = wl_handle_private_cmd(net, command, buf_size);
+	bytes_written = wl_handle_private_cmd(net, command, priv_cmd.total_len);
 	if (bytes_written >= 0) {
-		if ((bytes_written == 0) && (priv_cmd.total_len > 0)) {
+		if ((bytes_written == 0) && (priv_cmd.total_len > 0))
 			command[0] = '\0';
-		}
 		if (bytes_written >= priv_cmd.total_len) {
-			DHD_ERROR(("%s: not enough for output. bytes_written:%d >= total_len:%d \n",
-				__FUNCTION__, bytes_written, priv_cmd.total_len));
+			DHD_ERROR(("%s: err. b_w:%d >= tot:%d\n", __FUNCTION__,
+				   bytes_written, priv_cmd.total_len));
 			ret = BCME_BUFTOOSHORT;
 			goto exit;
-		} else {
-			bytes_written++;
 		}
+		bytes_written++;
 		priv_cmd.used_len = bytes_written;
 		if (copy_to_user(priv_cmd.buf, command, bytes_written)) {
-			DHD_ERROR(("%s: failed to copy data to user buffer\n", __FUNCTION__));
+			DHD_ERROR(("%s: failed copy to user\n", __FUNCTION__));
 			ret = -EFAULT;
 		}
 	} else {
@@ -1396,17 +1374,13 @@ int wl_android_priv_cmd(struct net_device *net, struct ifreq *ifr, int cmd)
 
 exit:
 	net_os_wake_unlock(net);
-	if (command) {
-		kfree(command);
-	}
-
+	kfree(command);
 	return ret;
 }
 
 int
 wl_handle_private_cmd(struct net_device *net, char *command, u32 buf_size)
 {
-
 	int bytes_written = 0;
 	android_wifi_priv_cmd priv_cmd;
 
@@ -1423,7 +1397,7 @@ wl_handle_private_cmd(struct net_device *net, char *command, u32 buf_size)
 
 	if (!g_wifi_on) {
 		DHD_ERROR(("%s: Ignore private cmd \"%s\" - iface is down\n",
-			__FUNCTION__, command));
+			   __FUNCTION__, command));
 		return 0;
 	}
 
@@ -1581,8 +1555,7 @@ wl_handle_private_cmd(struct net_device *net, char *command, u32 buf_size)
 	}
 	else {
 		DHD_ERROR(("Unknown PRIVATE command %s - ignored\n", command));
-		snprintf(command, 5, "FAIL");
-		bytes_written = strlen("FAIL");
+		bytes_written = scnprintf(command, sizeof("FAIL"), "FAIL");
 	}
 
 	return bytes_written;

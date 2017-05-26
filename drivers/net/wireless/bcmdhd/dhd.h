@@ -683,6 +683,7 @@ extern void dhd_txcomplete(dhd_pub_t *dhdp, void *txp, bool success);
 #define WIFI_FEATURE_HAL_EPNO           0x40000     /* WiFi PNO enhanced                */
 #define WIFI_FEATURE_RSSI_MONITOR       0x80000     /* RSSI Monitor                     */
 #define WIFI_FEATURE_CONFIG_NDO         0x200000    /* ND offload configure             */
+#define WIFI_FEATURE_FILTER_IE          0x400000    /* Probe req ie filter              */
 
 #define MAX_FEATURE_SET_CONCURRRENT_GROUPS  3
 
@@ -787,6 +788,14 @@ extern bool dhd_support_sta_mode(dhd_pub_t *dhd);
 #ifdef DHD_DEBUG
 extern int write_to_file(dhd_pub_t *dhd, uint8 *buf, int size);
 #endif /* DHD_DEBUG */
+
+#ifdef FILTER_IE
+int dhd_read_from_file(dhd_pub_t *dhd);
+int dhd_parse_filter_ie(dhd_pub_t *dhd, uint8 *buf);
+int dhd_get_filter_ie_count(dhd_pub_t *dhd, uint8 *buf);
+int dhd_parse_oui(dhd_pub_t *dhd, uint8 *inbuf, uint8 *oui, int len);
+int dhd_check_valid_ie(dhd_pub_t *dhdp, uint8 *buf, int len);
+#endif /* FILTER_IE */
 
 extern int dhd_dev_set_rssi_monitor_cfg(struct net_device *dev, int start,
              int8 max_rssi, int8 min_rssi);
@@ -932,7 +941,8 @@ extern int dhd_set_ap_isolate(dhd_pub_t *dhdp, uint32 idx, int val);
 extern int dhd_bssidx2idx(dhd_pub_t *dhdp, uint32 bssidx);
 
 extern bool dhd_is_concurrent_mode(dhd_pub_t *dhd);
-extern int dhd_iovar(dhd_pub_t *pub, int ifidx, char *name, char *cmd_buf, uint cmd_len, int set);
+int dhd_iovar(dhd_pub_t *pub, int ifidx, char *name, char *param_buf,
+	      uint param_len, char *res_buf, uint res_len, int set);
 extern int dhd_getiovar(dhd_pub_t *pub, int ifidx, char *name, char *cmd_buf,
 		uint cmd_len, char **resptr, uint resp_len);
 
